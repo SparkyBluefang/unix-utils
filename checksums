@@ -1,0 +1,175 @@
+#!/usr/bin/env python2
+
+# Copyright (C) 2014 Matthew Turnbull. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without 
+# modification, are permitted provided that the following conditions are met:
+#
+#  1. Redistributions of source code must retain the above copyright notice, this 
+#     list of conditions and the following disclaimer.
+#  2. Redistributions in binary form must reproduce the above copyright notice, 
+#     this list of conditions and the following disclaimer in the documentation 
+#     and/or other materials provided with the distribution. 
+#  3. Neither the name of Caligon Studios nor the names of its contributors may 
+#     be used to endorse or promote products derived from this software without 
+#     specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE 
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE 
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL 
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR 
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER 
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, 
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE 
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+import sys, re, zlib,  shutil, textwrap
+from optparse import OptionParser, IndentedHelpFormatter
+from os import path
+
+version = """\
+%prog 2012.08.31.23.32
+Copyright (C) 2012 Matthew Turnbull. All rights reserved.
+Use of this source code is governed by the 3-clause BSD License
+that can be found in the %prog source.
+"""
+
+usage="Usage: %prog [options] FILES"
+
+description = """\
+%prog is a utility to verify the integrity of a file using a CRC32 checksum \
+stored in the file name. A CRC32 checksum is an 8 character hexadecimal string. \
+This is a common practice used by Anime sub releases.
+
+When checking the checksum, the following file name formats are recognized:
+  ...[checksum]...
+  ...(checksum)...
+  ..._checksum_...
+
+When appending the checksum to the file name, the bracketed (first) format is used.\
+"""
+
+epilog = """
+FILES is the list of files to preform the action on. This can be a single file, \
+multiple files, or a glob if your shell supports it.
+
+Examples:
+  %prog -a report.txt image.png *.xml
+  %prog -c *.mkv
+  %prog video-\[1004456E\].3gp
+"""
+
+# Constants
+rcsum = re.compile("((?<=\[)[a-fA-F0-9]{8}(?=\]))|((?<=\()[a-fA-F0-9]{8}(?=\)))|((?<=_)[a-fA-F0-9]{8}(?=_))")
+c_null = "[00;00m"
+c_red = "[31;01m"
+c_green = "[32;01m"
+
+# GRRR... Keep newlines in the description text.
+class IndentedHelpFormatterNL(IndentedHelpFormatter):
+	def format_description(self, description):
+		if not description:
+			return description
+		desc_width = self.width - self.current_indent
+		indent = " "*self.current_indent
+		bits = description.split("\n")
+		formatted_bits = [
+			textwrap.fill(bit,
+				desc_width,
+				initial_indent=indent,
+				subsequent_indent=indent)
+	                 for bit in bits]
+		return "\n".join(formatted_bits) + "\n"
+	format_epilog = format_description
+
+# Generator to read the file in chunks
+def chunked_read(file_object, chunk_size=1024):
+	while True:
+		data = file_object.read(chunk_size)
+		if not data:
+			break;
+		yield data
+
+# Caclulate file CRC32 or return None on failure
+def crc32_checksum(filename):
+	if not path.isfile(filename):
+		return None
+
+	with open(filename, "rb") as f:
+		csum = 0
+		for chunk in chunked_read(f, 4096):
+			csum = zlib.crc32(chunk, csum)
+		return "%.8X" % (csum & 0xFFFFFFFF)
+
+	return None
+
+# Make the replacement handler function for re.sub
+def makeSubHandler(csum, hasMatch):
+	def subHandler(match):
+		msum = match.group(0)
+		if msum.upper() == csum:
+			return c_green + msum + c_null
+		if not hasMatch:
+			return c_red + msum + c_null
+		return msum
+	return subHandler
+
+# Process the files listed on the command line
+def main():
+	# Handle command line
+	parser = OptionParser(version=version, usage=usage, description=description,
+		formatter=IndentedHelpFormatterNL())
+	parser.epilog=parser.expand_prog_name(epilog)
+	parser.add_option("-c", "--check", action="store_true", default=False,
+		help="Compute the checksum and try to match it to the file name using one of the formats listed above.")
+	parser.add_option("-a", "--append", action="store_true", default=False,
+		help="Compute the checksum and append it to the the file name, just before the file extension.")
+	parser.add_option("-v", "--verbose", action="store_true", default=False,
+		help="Print extra information")
+	(opts, args) = parser.parse_args()
+
+	if opts.append and opts.check:
+		parser.error("Options 'append' and 'check' are mutually exclusive")
+	if not opts.append and not opts.check:
+		opts.check = True
+	if opts.append:
+		opts.verbose = True
+
+	for filename in args:
+		if opts.verbose:
+			print "Professing file: %s" % filename
+
+		csum = crc32_checksum(filename)
+		if not csum:
+			print "Unable to calculate checksum for file: %s" % filename
+			continue
+
+		if opts.append:
+			src = filename
+			(root, ext) = path.splitext(src)
+			dst = "%s[%s]%s" % (root, csum, ext)
+			shutil.move(src, dst)
+			print "Moved to: %s" % dst
+
+		elif opts.check:
+			(fpath, fname) = path.split(filename)
+			c_in = c_red
+			hasMatch = False
+			if fname.upper().find("[%s]" % csum) >= 0 \
+			or fname.upper().find("(%s)" % csum) >= 0 \
+			or fname.upper().find("_%s_" % csum) >= 0:
+				c_in = c_green
+				hasMatch = True
+
+			c_fname = rcsum.sub(makeSubHandler(csum, hasMatch), fname)
+
+			print "%s%s%s   %s" % (c_in, csum, c_null, c_fname)
+
+		if opts.verbose:
+			print "Done"
+
+if __name__ == "__main__":
+	main()
+

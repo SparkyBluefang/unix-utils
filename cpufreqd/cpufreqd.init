@@ -1,0 +1,24 @@
+#!/sbin/runscript
+
+extra_commands="reload"
+PIDF="/var/run/cpufreqd.pid"
+EXEC="/usr/bin/cpufreqd"
+
+start() {
+	ebegin "Starting cpufreqd"
+	start-stop-daemon --pidfile $PIDF --start --exec $EXEC
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping cpufreqd"
+	start-stop-daemon --pidfile $PIDF --stop
+	eend $?
+}
+
+reload() {
+	ebegin "Reloading cpufreqd configuration"
+	start-stop-daemon --pidfile $PIDF --signal HUP
+	eend $?
+}
+

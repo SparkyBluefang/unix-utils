@@ -1,0 +1,61 @@
+#!/bin/sh
+
+# Copyright (C) 2014 Matthew Turnbull. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without 
+# modification, are permitted provided that the following conditions are met:
+#
+#  1. Redistributions of source code must retain the above copyright notice, this 
+#     list of conditions and the following disclaimer.
+#  2. Redistributions in binary form must reproduce the above copyright notice, 
+#     this list of conditions and the following disclaimer in the documentation 
+#     and/or other materials provided with the distribution. 
+#  3. Neither the name of Caligon Studios nor the names of its contributors may 
+#     be used to endorse or promote products derived from this software without 
+#     specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE 
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE 
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL 
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR 
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER 
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, 
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE 
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+if [ "$1" = "-n" ]; then
+	shift
+else
+	BLUE="\e[34;01m"
+	GREEN="\e[32;01m"
+	RED="\e[31;01m"
+	END="\e[00;00m"
+fi
+
+if ([ ! -f "$1" ] || [ ! -b "$2" ]); then
+	echo "Usage: `basename \"$0\"` [-n] <image file> <dev node>"
+	exit 1
+fi
+
+printf "${BLUE}Image file:${END}   ${GREEN}${1}${END}\n"
+blocks=`ls -l "$1" | awk '{ print $5 }'`
+blocks=$((blocks/2048))
+printf "${BLUE}Image blocks:${END} ${GREEN}${blocks}${END}\n"
+
+sum1=`sha512sum -b "$1" | awk '{ print $1 }'`
+printf "${BLUE}Image SHA512:${END} ${GREEN}${sum1}${END}\n"
+
+printf "${BLUE}Disk node:${END}    ${GREEN}${2}${END}\n"
+sum2=`dd if="$2" bs=2048 count=$blocks | sha512sum -b | awk '{ print $1 }'` #2>&1 | egrep -v "copied|records (in|out)"
+printf "${BLUE}Disk SHA512:${END}  ${GREEN}${sum2}${END}\n"
+
+if [ "$sum1" = "$sum2" ]; then
+	printf "${BLUE}Burn${END}  ${GREEN}GOOD${END}\n"
+	exit
+else
+	printf "${BLUE}Burn${END}  ${RED}BAD${END}\n"
+	exit 1
+fi
+

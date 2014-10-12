@@ -1,0 +1,178 @@
+#!/bin/sh
+
+# Copyright (C) 2014 Matthew Turnbull. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without 
+# modification, are permitted provided that the following conditions are met:
+#
+#  1. Redistributions of source code must retain the above copyright notice, this 
+#     list of conditions and the following disclaimer.
+#  2. Redistributions in binary form must reproduce the above copyright notice, 
+#     this list of conditions and the following disclaimer in the documentation 
+#     and/or other materials provided with the distribution. 
+#  3. Neither the name of Caligon Studios nor the names of its contributors may 
+#     be used to endorse or promote products derived from this software without 
+#     specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE 
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE 
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL 
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR 
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER 
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, 
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE 
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+set_cpu_gov() {
+	cpupower --cpu $1 frequency-set --governor $2 > /dev/null 2>&1
+	return $?
+}
+
+set_cpu_max() {
+	cpupower --cpu $1 frequency-set --max ${2}kHz > /dev/null 2>&1
+	return $?
+}
+
+main() {
+	CONF=/etc/conf.d/cpufreqd
+	PIDF=/var/run/cpufreqd.pid
+	echo $$ > $PIDF
+	log "Starting as PID $$"
+
+	RUN="1"
+	LOAD_CONFIG="1"
+
+	#
+	# Signal handling
+	#
+
+	load_conf() {
+		log "Loading config..."
+		LOAD_CONFIG="1"
+	}
+
+	exit_daemon() {
+		log "Stopping..."
+		RUN=""
+	}
+
+	trap load_conf HUP
+	trap exit_daemon QUIT
+	trap exit_daemon TERM
+
+
+	CPU_LIST=`cat /proc/cpuinfo | awk '$1 == "processor" { print $3 }'`
+
+	#
+	# Main loop
+	#
+
+	while [ -n "$RUN" ]; do
+		# Load the config if we've been asked to 
+		if [ -n "$LOAD_CONFIG" ]; then
+			. $CONF
+			LOAD_CONFIG=""
+		fi
+
+		DELAY=$DELAY_DEF
+
+		# Grab system-wide information
+		AC=`cat /sys/class/power_supply/AC/online`
+
+		# Process each CPU
+		for CPU in $CPU_LIST; do
+			CPU_LONG=$CPU
+			if [ $CPU -lt 10 ]; then
+				CPU_LONG="0$CPU"
+			fi
+
+			# Grab CPU information
+			TMP=`cat /sys/bus/acpi/devices/LNXTHERM\:${CPU_LONG}/thermal_zone/temp`
+
+			# What should we do?
+			GOV=$GOV_AC
+			MAX_FREQ=$FREQ_MAX
+			if [ "$AC" = "1" ]; then
+				if [ $TMP -ge $TMP_HOT ]; then
+					DELAY=$DELAY_HOT
+					MAX_FREQ=$FREQ_HOT
+				elif [ $TMP -ge $TMP_MID ]; then
+					MAX_FREQ=$FREQ_MID
+				fi
+			else
+				GOV=$GOV_BAT
+				MAX_FREQ=$FREQ_BAT
+			fi
+
+			# Set the governor
+			ERROR_GOV="-"
+			eval LAST_GOV='$'GOV_$CPU
+			if [ "$LAST_GOV" != "$GOV" ]; then
+				set_cpu_gov $CPU $GOV
+				ERROR_GOV=$?
+				eval GOV_$CPU=$GOV
+			fi
+
+			# Set the frequency
+			ERROR_CPU="-"
+			eval LAST_MAX_FREQ='$'MAX_FREQ_$CPU
+			if [ "$LAST_MAX_FREQ" != "$MAX_FREQ" ]; then
+				set_cpu_max $CPU $MAX_FREQ
+				ERROR_CPU=$?
+				eval MAX_FREQ_$CPU=$MAX_FREQ
+			fi
+
+			# Log our status
+			if [ $VERBOSE -gt 0 ]; then
+				log "AC: $AC CPU: $CPU Tmp: $TMP Gov: $GOV Freq: $MAX_FREQ Err: $ERROR_GOV $ERROR_CPU"
+			fi
+		done
+
+		# Interruptable sleep
+		if [ -n "$RUN" ]; then
+			sleep $DELAY &
+			wait $!
+		fi
+	done
+
+	#
+	# Reset the CPUs before we exit
+	#
+
+	for CPU in $CPU_LIST; do
+		ERROR_CPU="-"
+		set_cpu_max $CPU $FREQ_STOP
+		ERROR_CPU=$?
+
+		ERROR_GOV="-"
+		set_cpu_gov $CPU $GOV_STOP
+		ERROR_GOV=$?
+
+		# Log our status
+		if [ $VERBOSE -gt 0 ]; then
+			log "Resetting CPU: $CPU Gov: $GOV_STOP Freq: $FREQ_STOP Err: $ERROR_GOV $ERROR_CPU"
+		fi
+	done
+
+	rm -f $PIDF
+
+	log "Exiting"
+}
+
+if [ "$1" = "-D" ]; then
+	log() { echo "$@"; }
+	main
+elif [ "$1" = "-d" ]; then
+	cd /
+	for fd in $(seq 0 255); do
+		eval exec $fd\>\&-
+	done
+
+	log() { logger -t cpufreqd "$@"; }
+	main
+else
+	( $0 -d & ) &
+fi
+

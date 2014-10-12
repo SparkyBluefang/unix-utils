@@ -1,0 +1,5 @@
+#!/bin/sh
+
+SKIP=`awk '/^__ARCHIVE_(FOLLOWS|BELOW)__/ { print NR + 1; exit 0; }' $1`
+tail -n +$SKIP $1 > $2
+
