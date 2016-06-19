@@ -12,7 +12,10 @@ for arg in $@; do
 done
 
 if [[ -z "$SKIP_SYNC" ]]; then
-echo -e "\e[1;31mSyncing portage ...\e[m"
+echo -e "\e[1;31mSyncing ...\e[m"
+	if [ command -v layman >/dev/null 2>&1 ]; then
+		layman -S
+	fi
 	emerge -v --sync
 	dispatch-conf
 fi
