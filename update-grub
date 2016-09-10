@@ -7,10 +7,14 @@ if [ -z $(awk '{ if ($2 == "/boot") print $2 }' /proc/mounts) ]; then
 	mount /boot
 fi
 
-grub2-mkconfig -o /boot/grub/grub.cfg
+grubcmd=$(command -v grub2-mkconfig || command -v grub-mkconfig)
+if [ -n "$grubcmd" ]; then
+	$grubcmd -o /boot/grub/grub.cfg
+else
+	echo "grub-mkconfig command not found!"
+fi
 
 if [ "$needMount" = "true" ]; then
 	echo "Unmounting /boot"
 	umount /boot
 fi
-
