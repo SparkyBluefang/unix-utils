@@ -7,38 +7,60 @@ depend() {
 start() {
 	ebegin "Starting firewall"
 
-	# Blank slate
-	nft flush ruleset
+	nft -f /dev/stdin <<-EOF
+		flush ruleset
 
-	# Setup the filter chains
-	nft add table inet filter
-	nft add chain inet filter prerouting { type filter hook prerouting priority -300 \; }
-	nft add chain inet filter input { type filter hook input priority 0 \; policy drop \; }
-	nft add chain inet filter forward { type filter hook forward priority 0 \; policy drop \; }
-	nft add chain inet filter output { type filter hook output priority 0 \; policy accept \; }
-	nft add chain inet filter TCP
-	nft add chain inet filter UDP
+		table inet filter {
+			chain prerouting {
+				type filter hook prerouting priority -300; policy accept;
 
-	# Drop spoofed packets (rp_filter)
-	nft add rule inet filter prerouting fib saddr . iif oif missing counter drop
+				# Drop spoofed packets (rp_filter)
+				fib saddr . iif oif missing counter drop
+			}
 
-	# Accept valid local and related/established incoming traffic
-	nft add rule inet filter input ct state related,established accept
-	nft add rule inet filter input iif lo accept
-	nft add rule inet filter input ct state invalid counter drop
+			chain input {
+				type filter hook input priority 0; policy drop;
 
-	# Accept important ICMP
-	nft add rule inet filter input ip protocol icmp icmp type echo-request ct state new accept
-	nft add rule inet filter input ip6 nexthdr icmpv6 icmpv6 type { echo-request,nd-neighbor-solicit,nd-neighbor-advert } ct state new accept
+				# Accept valid local and related/established incoming traffic
+				ct state established,related accept
+				iif lo accept
 
-	# Wire in TCP and UDP chains for custom rules
-	nft add rule inet filter input ip protocol tcp tcp flags \& \(fin\|syn\|rst\|ack\) == syn ct state new jump TCP
-	nft add rule inet filter input ip protocol udp ct state new jump UDP
+				# Accept important ICMP and IPSec
+				icmp type echo-request ct state new accept
+				icmpv6 type echo-request ct state new accept
+				icmpv6 type nd-neighbor-solicit accept
+				icmpv6 type nd-neighbor-advert accept
+				icmpv6 type nd-router-solicit accept
+				icmpv6 type nd-router-advert accept
 
-	# Drop all unmatched traffic
-	nft add rule inet filter input ip protocol tcp counter reject with tcp reset
-	nft add rule inet filter input ip protocol udp counter reject
-	nft add rule inet filter input counter reject with icmp type prot-unreachable
+				# Drop packets with invalid state
+				ct state invalid counter drop
+
+				# Wire in TCP and UDP chains for custom rules
+				ip protocol tcp tcp flags & (fin | syn | rst | ack) == syn ct state new jump TCP
+				ip protocol udp ct state new jump UDP
+
+				# Drop all unmatched traffic
+				ip protocol tcp counter reject with tcp reset
+				ip protocol udp counter reject
+				counter reject with icmp type prot-unreachable
+			}
+
+			chain TCP {
+			}
+
+			chain UDP {
+			}
+
+			chain forward {
+				type filter hook forward priority 0; policy drop;
+			}
+
+			chain output {
+				type filter hook output priority 0; policy accept;
+			}
+		}
+	EOF
 
 	for x in ${TCP_SERVICES}; do
 		nft add rule inet filter TCP tcp dport ${x} accept
