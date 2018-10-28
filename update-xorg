@@ -1,0 +1,4 @@
+#!/bin/sh
+
+chown -v :input /usr/bin/Xorg
+chmod -v g+s /usr/bin/Xorg
